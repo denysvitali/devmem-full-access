@@ -1,0 +1,7 @@
+.vscode
+*.o
+*.cmd
+*.d
+*.ko
+*.mod
+*.mod.c

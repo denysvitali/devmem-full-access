@@ -1,45 +1,50 @@
-#include <linux/module.h>
 #include <linux/kernel.h>
-#include <linux/livepatch.h>
+#include <linux/module.h>
+#include <linux/kprobes.h>
+#include <linux/ktime.h>
+#include <linux/sched.h>
 
-#include <linux/seq_file.h>
+static char func_name[KSYM_NAME_LEN] = "devmem_is_allowed";
+module_param_string(func, func_name, KSYM_NAME_LEN, 0644);
+MODULE_PARM_DESC(func, "Patches devmem_is_allowed to always return 1");
 
-
-int modified_devmem_function(unsigned long pagenr)
+static int ret_handler(struct kretprobe_instance *ri, struct pt_regs *regs)
 {
-    return 1;
+    regs->regs[0] = 1;
+    return 0;
 }
+NOKPROBE_SYMBOL(ret_handler);
 
-static struct klp_func funcs[] = {
+static struct kretprobe my_kretprobe = {
+    .handler = ret_handler,
+};
+
+static int __init kretprobe_init(void)
+{
+    int ret;
+
+    my_kretprobe.kp.symbol_name = func_name;
+    ret = register_kretprobe(&my_kretprobe);
+    if (ret < 0)
     {
-        .old_name = "devmem_is_allowed",
-        .new_func = modified_devmem_function,
-    }, { }
-};
-
-static struct klp_object objs[] = {
-    {
-        /* name being NULL means vmlinux */
-        .funcs = funcs,
-    }, { }
-};
-
-static struct klp_patch patch = {
-    .mod = THIS_MODULE,
-    .objs = objs,
-};
-
-static int livepatch_init(void)
-{
-    return klp_enable_patch(&patch);
+        pr_err("register_kretprobe failed, returned %d\n", ret);
+        return ret;
+    }
+    pr_info("Planted return probe at %s: %p\n",
+            my_kretprobe.kp.symbol_name, my_kretprobe.kp.addr);
+    return 0;
 }
 
-static void livepatch_exit(void)
+static void __exit kretprobe_exit(void)
 {
+    unregister_kretprobe(&my_kretprobe);
+    pr_info("kretprobe at %p unregistered\n", my_kretprobe.kp.addr);
+
+    /* nmissed > 0 suggests that maxactive was set too low. */
+    pr_info("Missed probing %d instances of %s\n",
+            my_kretprobe.nmissed, my_kretprobe.kp.symbol_name);
 }
 
-module_init(livepatch_init);
-module_exit(livepatch_exit);
+module_init(kretprobe_init)
+module_exit(kretprobe_exit)
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("make /dev/mem writable beyond the first 1 MB");
-MODULE_INFO(livepatch, "Y");
